@@ -7,14 +7,15 @@ import itertools
 import wx
 import wxmpl
 
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from pylab import array, append, arange, mean, reshape, shape, std
 from sys import argv
 
-meanData = defaultdict(dict)
-stdData = defaultdict(dict)
 stats = []
 title = ""
+
+Data = namedtuple('Data', 'mean std')
+DATA = Data(defaultdict(dict), defaultdict(dict))
 
 """ return the union of two lists """
 def union(a, b):
@@ -46,11 +47,8 @@ the list of statistics that can be plotted.
 """
 def readDatDirectory(key, directory):
     global stats
-    global meanData
-    global stdData
-
     #Don't read data in if it's already read
-    if not key in meanData:
+    if not key in DATA.mean:
         data = defaultdict(array)
 
         #Process the dat files
@@ -86,8 +84,8 @@ def readDatDirectory(key, directory):
         #Iterate through the stats and calculate mean/standard deviation
         for aKey in stats:
             if aKey in data:
-                meanData[key][aKey] = mean(data[aKey], axis=0)
-                stdData[key][aKey] = std(data[aKey], axis=0)
+                DATA.mean[key][aKey] = mean(data[aKey], axis=0)
+                DATA.std[key][aKey] = std(data[aKey], axis=0)
 
 """The plot panel.
 """
@@ -110,8 +108,10 @@ class Plot(wxmpl.PlotPanel):
         t = arange(0, self.generations+1, 1)
         for aDir in checkedDirectories:
             for stat in checkedStats:
-                axes.plot(t, meanData[aDir][stat], linewidth=1.0)
-                axes.errorbar(t, meanData[aDir][stat], yerr=stdData[aDir][stat],
+                axes.plot(t, DATA.mean[aDir][stat], linewidth=1.0)
+                axes.errorbar(t,
+                              DATA.mean[aDir][stat],
+                              yerr=DATA.std[aDir][stat],
                               marker='.',
                               capsize=2,
                               linestyle='-',
