@@ -7,15 +7,24 @@ import itertools
 import wx
 import wxmpl
 
-from collections import defaultdict, namedtuple
-from pylab import array, append, arange, mean, reshape, shape, std
+from collections import defaultdict, OrderedDict
+from pylab import amin, amax, array, append, arange, mean, median, reshape, shape, std, sqrt
 from sys import argv
 
 stats = []
 title = ""
 
-Data = namedtuple('Data', 'mean std')
-DATA = Data(defaultdict(dict), defaultdict(dict))
+PLOT_TYPES = OrderedDict([("Mean",  "mean"),
+                          ("Median", "median")])
+
+ERRORBAR_TYPES = OrderedDict([("None",  None),
+                              ("Standard Deviation", "std"),
+                              ("Standard Error", "ste"),
+                              ("Min/Max", "min")])
+
+DATA = {"mean" : defaultdict(dict), "median" : defaultdict(dict),
+        "std" : defaultdict(dict), "ste": defaultdict(dict),
+        "min" : defaultdict(dict), "max" : defaultdict(dict)}
 
 """ return the union of two lists """
 def union(a, b):
@@ -48,7 +57,7 @@ the list of statistics that can be plotted.
 def readDatDirectory(key, directory):
     global stats
     #Don't read data in if it's already read
-    if not key in DATA.mean:
+    if not key in DATA["mean"]:
         data = defaultdict(array)
 
         #Process the dat files
@@ -84,8 +93,12 @@ def readDatDirectory(key, directory):
         #Iterate through the stats and calculate mean/standard deviation
         for aKey in stats:
             if aKey in data:
-                DATA.mean[key][aKey] = mean(data[aKey], axis=0)
-                DATA.std[key][aKey] = std(data[aKey], axis=0)
+                DATA["mean"][key][aKey] = mean(data[aKey], axis=0)
+                DATA["median"][key][aKey] = median(data[aKey], axis=0)
+                DATA["std"][key][aKey] = std(data[aKey], axis=0)
+                DATA["ste"][key][aKey] = std(data[aKey], axis=0)/ sqrt(len(data[aKey]))
+                DATA["min"][key][aKey] = amin(data[aKey], axis=0)-mean(data[aKey], axis=0)
+                DATA["max"][key][aKey] = amax(data[aKey], axis=0)-mean(data[aKey], axis=0)
 
 """The plot panel.
 """
@@ -101,22 +114,28 @@ class Plot(wxmpl.PlotPanel):
 
     """Plots checked data and stats
     """
-    def plot(self, checkedDirectories, checkedStats):
+    def plot(self, checkedDirectories, checkedStats, checkedPlot, checkedErrorBar):
         self.fig.clear()
         axes = self.fig.gca()
 
         t = arange(0, self.generations+1, 1)
         for aDir in checkedDirectories:
             for stat in checkedStats:
-                axes.plot(t, DATA.mean[aDir][stat], linewidth=1.0)
-                axes.errorbar(t,
-                              DATA.mean[aDir][stat],
-                              yerr=DATA.std[aDir][stat],
-                              marker='.',
-                              capsize=2,
-                              linestyle='-',
-                              label=""+aDir+" - "+stat)
+                if ERRORBAR_TYPES[checkedErrorBar] is None:
+                    axes.plot(t,
+                          DATA[PLOT_TYPES[checkedPlot]][aDir][stat],
+                          linewidth=1.0,
+                          label=""+aDir+" - "+stat)
+                else:
+                    axes.errorbar(t,
+                                  DATA[PLOT_TYPES[checkedPlot]][aDir][stat],
+                                  yerr=DATA[ERRORBAR_TYPES[checkedErrorBar]][aDir][stat],
+                                  marker='.',
+                                  capsize=2,
+                                  linestyle='-',
+                                  label=""+aDir+" - "+stat)
 
+        axes.set_xlim((0,self.generations))
         axes.set_xlabel('Generation')
         axes.set_ylabel('Value')
         axes.set_title(self.title)
@@ -139,6 +158,9 @@ class MainFrame(wx.Frame):
         self.directories = directories
         self.checkedStats = []
         self.checkedDirectories = []
+        self.checkedPlotType = PLOT_TYPES.keys()[0]
+        self.checkedErrorBar = ERRORBAR_TYPES.keys()[0]
+
         self.initUI()
         self.Maximize(True)
 
@@ -148,17 +170,33 @@ class MainFrame(wx.Frame):
         hbox = wx.BoxSizer(wx.HORIZONTAL)
         vbox = wx.BoxSizer(wx.VERTICAL)
 
-        self.dirBox = wx.CheckListBox(parent=self, name='dirBox',
+        self.dirBox = wx.CheckListBox(parent=self,
                                       choices=self.directories.keys(),
                                       size=(200, -1))
+        self.dirBox.SetLabel("Setups to Plot")
         self.dirBox.Bind(wx.EVT_CHECKLISTBOX, self.onDirBoxEvent)
 
-        self.statsBox = wx.CheckListBox(parent=self, name='statsBox',
+        self.statsBox = wx.CheckListBox(parent=self,
                                         choices=[], size=(200, -1))
+        self.statsBox.SetLabel("Statistics to Plot")
         self.statsBox.Bind(wx.EVT_CHECKLISTBOX, self.onStatsBoxEvent)
 
-        vbox.Add(self.dirBox, 1, wx.EXPAND|wx.ALL, 5)
-        vbox.Add(self.statsBox, 1, wx.EXPAND|wx.ALL, 5)
+        self.plotBox = wx.RadioBox(parent=self, label="Plot Type",
+                                       majorDimension = 1,
+                                       choices = PLOT_TYPES.keys(),
+                                       size=(200, -1))
+        self.plotBox.Bind(wx.EVT_RADIOBOX, self.onPlotBoxEvent)
+
+        self.errorBarBox = wx.RadioBox(parent=self, label="Error Bars",
+                                       majorDimension = 1,
+                                       choices = ERRORBAR_TYPES.keys(),
+                                       size=(200, -1))
+        self.errorBarBox.Bind(wx.EVT_RADIOBOX, self.onErrorBarBoxEvent)
+
+        vbox.Add(self.dirBox, 2, wx.EXPAND|wx.ALL, 5)
+        vbox.Add(self.statsBox, 2, wx.EXPAND|wx.ALL, 5)
+        vbox.Add(self.plotBox, 1, wx.EXPAND|wx.ALL, 5)
+        vbox.Add(self.errorBarBox, 1, wx.EXPAND|wx.ALL, 5)
         hbox.Add(vbox, 0, wx.EXPAND|wx.ALL, 5)
 
         self.plot = Plot(self, self.plotTitle, self.generations)
@@ -166,7 +204,6 @@ class MainFrame(wx.Frame):
 
         self.SetSizer(hbox)
         self.Fit()
-
         wx.EVT_WINDOW_DESTROY(self, self.OnWindowDestroy)
 
     """Triggered on window close event
@@ -179,7 +216,8 @@ class MainFrame(wx.Frame):
     """
     def onStatsBoxEvent(self, event):
         self.checkedStats = self.statsBox.GetCheckedStrings()
-        self.plot.plot(self.checkedDirectories, self.checkedStats)
+        self.plot.plot(self.checkedDirectories, self.checkedStats,
+                       self.checkedPlotType, self.checkedErrorBar)
 
     """Triggered when a directory check box is toggled.
     Reads all selected check boxes, reads data in for selected boxes
@@ -195,7 +233,22 @@ class MainFrame(wx.Frame):
         stats = filter(lambda stat: not stat in self.statsBox.GetItems(), stats)
         self.statsBox.InsertItems(stats, 0)
 
-        self.plot.plot(self.checkedDirectories, self.checkedStats)
+        self.plot.plot(self.checkedDirectories, self.checkedStats,
+                       self.checkedPlotType, self.checkedErrorBar)
+
+    """Triggered when selecting an error bar type
+    """
+    def onPlotBoxEvent(self, event):
+        self.checkedPlotType = self.plotBox.GetStringSelection()
+        self.plot.plot(self.checkedDirectories, self.checkedStats,
+                       self.checkedPlotType, self.checkedErrorBar)
+
+    """Triggered when selecting an error bar type
+    """
+    def onErrorBarBoxEvent(self, event):
+        self.checkedErrorBar = self.errorBarBox.GetStringSelection()
+        self.plot.plot(self.checkedDirectories, self.checkedStats,
+                       self.checkedPlotType, self.checkedErrorBar)
 
     """Emulates all directories being selected causing all the data to be
     read at once.
