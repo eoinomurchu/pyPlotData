@@ -4,11 +4,13 @@ import csv
 import difflib
 import glob
 import itertools
+import traceback
 import wx
 import wxmpl
 
 from collections import defaultdict, OrderedDict
-from pylab import amin, amax, array, append, arange, mean, median, reshape, shape, std, sqrt
+from matplotlib import cm
+from pylab import amin, amax, array, append, arange, linspace, mean, median, reshape, shape, std, sqrt
 from sys import argv
 
 stats = []
@@ -20,7 +22,7 @@ PLOT_TYPES = OrderedDict([("Mean",  "mean"),
 ERRORBAR_TYPES = OrderedDict([("None",  None),
                               ("Standard Deviation", "std"),
                               ("Standard Error", "ste"),
-                              ("Min/Max", "min")])
+                              ("Min/Max", "minmax")])
 
 DATA = {"mean" : defaultdict(dict), "median" : defaultdict(dict),
         "std" : defaultdict(dict), "ste": defaultdict(dict),
@@ -97,7 +99,7 @@ def readDatDirectory(key, directory):
                 DATA["median"][key][aKey] = median(data[aKey], axis=0)
                 DATA["std"][key][aKey] = std(data[aKey], axis=0)
                 DATA["ste"][key][aKey] = std(data[aKey], axis=0)/ sqrt(len(data[aKey]))
-                DATA["min"][key][aKey] = amin(data[aKey], axis=0)-mean(data[aKey], axis=0)
+                DATA["min"][key][aKey] = mean(data[aKey], axis=0)-amin(data[aKey], axis=0)
                 DATA["max"][key][aKey] = amax(data[aKey], axis=0)-mean(data[aKey], axis=0)
 
 """The plot panel.
@@ -105,29 +107,43 @@ def readDatDirectory(key, directory):
 class Plot(wxmpl.PlotPanel):
     """Constructor
     """
-    def __init__(self, parent, title, generations):
+    def __init__(self, parent, title, generations, nColours):
         wxmpl.PlotPanel.__init__(self, parent, -1)
         self.title = title
         self.generations = generations
+        self.colours = self.setUpColourCycle(nColours)
         self.fig = self.get_figure()
-        self.Show()
+        self.axes = self.fig.gca()
+
+    def setUpColourCycle(self, nColours):
+        cmap = cm.get_cmap(name='Set3')
+        return [cmap(i) for i in linspace(0.0, 1.0, nColours)]
 
     """Plots checked data and stats
     """
     def plot(self, checkedDirectories, checkedStats, checkedPlot, checkedErrorBar):
         self.fig.clear()
-        axes = self.fig.gca()
+        self.axes = self.fig.gca()
+        self.axes.set_color_cycle(self.colours)
 
         t = arange(0, self.generations+1, 1)
         for aDir in checkedDirectories:
             for stat in checkedStats:
                 if ERRORBAR_TYPES[checkedErrorBar] is None:
-                    axes.plot(t,
-                          DATA[PLOT_TYPES[checkedPlot]][aDir][stat],
-                          linewidth=1.0,
-                          label=""+aDir+" - "+stat)
+                    self.axes.plot(t,
+                              DATA[PLOT_TYPES[checkedPlot]][aDir][stat],
+                              linewidth=1.0,
+                              label=""+aDir+" - "+stat)
+                elif ERRORBAR_TYPES[checkedErrorBar] == "minmax":
+                    self.axes.errorbar(t,
+                                  DATA[PLOT_TYPES[checkedPlot]][aDir][stat],
+                                  yerr=[DATA["min"][aDir][stat],DATA["max"][aDir][stat]],
+                                  marker='.',
+                                  capsize=2,
+                                  linestyle='-',
+                                  label=""+aDir+" - "+stat)
                 else:
-                    axes.errorbar(t,
+                    self.axes.errorbar(t,
                                   DATA[PLOT_TYPES[checkedPlot]][aDir][stat],
                                   yerr=DATA[ERRORBAR_TYPES[checkedErrorBar]][aDir][stat],
                                   marker='.',
@@ -135,13 +151,13 @@ class Plot(wxmpl.PlotPanel):
                                   linestyle='-',
                                   label=""+aDir+" - "+stat)
 
-        axes.set_xlim((0,self.generations))
-        axes.set_xlabel('Generation')
-        axes.set_ylabel('Value')
-        axes.set_title(self.title)
-        axes.legend()
+        self.axes.set_xlim((0,self.generations))
+        self.axes.set_xlabel('Generation')
+        self.axes.set_ylabel('Value')
+        self.axes.set_title(self.title)
+        self.axes.legend(loc=2,prop={'size':6})
 
-        axes.grid(True)
+        self.axes.grid(True)
         self.draw()
         self.Layout()
 
@@ -160,6 +176,7 @@ class MainFrame(wx.Frame):
         self.checkedDirectories = []
         self.checkedPlotType = PLOT_TYPES.keys()[0]
         self.checkedErrorBar = ERRORBAR_TYPES.keys()[0]
+        self.plots = {}
 
         self.initUI()
         self.Maximize(True)
@@ -167,11 +184,12 @@ class MainFrame(wx.Frame):
     """Create the UI.
     """
     def initUI(self):
-        hbox = wx.BoxSizer(wx.HORIZONTAL)
+        self.hbox = wx.BoxSizer(wx.HORIZONTAL)
         vbox = wx.BoxSizer(wx.VERTICAL)
+        self.plotVBox = wx.BoxSizer(wx.VERTICAL)
 
         self.dirBox = wx.CheckListBox(parent=self,
-                                      choices=self.directories.keys(),
+                                      choices=sorted(self.directories.keys()),
                                       size=(200, -1))
         self.dirBox.SetLabel("Setups to Plot")
         self.dirBox.Bind(wx.EVT_CHECKLISTBOX, self.onDirBoxEvent)
@@ -197,14 +215,33 @@ class MainFrame(wx.Frame):
         vbox.Add(self.statsBox, 2, wx.EXPAND|wx.ALL, 5)
         vbox.Add(self.plotBox, 1, wx.EXPAND|wx.ALL, 5)
         vbox.Add(self.errorBarBox, 1, wx.EXPAND|wx.ALL, 5)
-        hbox.Add(vbox, 0, wx.EXPAND|wx.ALL, 5)
 
-        self.plot = Plot(self, self.plotTitle, self.generations)
-        hbox.Add(self.plot, 1, wx.EXPAND|wx.ALL, 5)
+        self.hbox.Add(vbox, 0, wx.EXPAND|wx.ALL, 5)
+        self.hbox.Add(self.plotVBox, 1, wx.EXPAND|wx.ALL, 5)
 
-        self.SetSizer(hbox)
+        self.SetSizer(self.hbox)
         self.Fit()
         wx.EVT_WINDOW_DESTROY(self, self.OnWindowDestroy)
+
+    def generatePlots(self):
+        for stat in self.statsBox.GetItems():
+            if not stat in self.plots:
+                self.plots[stat] = Plot(self, stat, self.generations, len(self.directories))
+                self.plotVBox.Add(self.plots[stat], 1, wx.EXPAND|wx.ALL, 5)
+
+    def drawPlots(self):
+        update = False
+        for stat in self.plots.keys():
+            if stat in self.checkedStats:
+                if not self.plots[stat].IsShown():
+                    self.plots[stat].Show()
+                    update = True
+                self.plots[stat].plot(self.checkedDirectories, [stat],
+                                      self.checkedPlotType, self.checkedErrorBar)
+            else:
+                self.plots[stat].Hide()
+        if update:
+            self.Fit()
 
     """Triggered on window close event
     """
@@ -216,8 +253,7 @@ class MainFrame(wx.Frame):
     """
     def onStatsBoxEvent(self, event):
         self.checkedStats = self.statsBox.GetCheckedStrings()
-        self.plot.plot(self.checkedDirectories, self.checkedStats,
-                       self.checkedPlotType, self.checkedErrorBar)
+        self.drawPlots()
 
     """Triggered when a directory check box is toggled.
     Reads all selected check boxes, reads data in for selected boxes
@@ -233,22 +269,20 @@ class MainFrame(wx.Frame):
         stats = filter(lambda stat: not stat in self.statsBox.GetItems(), stats)
         self.statsBox.InsertItems(stats, 0)
 
-        self.plot.plot(self.checkedDirectories, self.checkedStats,
-                       self.checkedPlotType, self.checkedErrorBar)
+        self.generatePlots()
+        self.drawPlots()
 
     """Triggered when selecting an error bar type
     """
     def onPlotBoxEvent(self, event):
         self.checkedPlotType = self.plotBox.GetStringSelection()
-        self.plot.plot(self.checkedDirectories, self.checkedStats,
-                       self.checkedPlotType, self.checkedErrorBar)
+        self.drawPlots()
 
     """Triggered when selecting an error bar type
     """
     def onErrorBarBoxEvent(self, event):
         self.checkedErrorBar = self.errorBarBox.GetStringSelection()
-        self.plot.plot(self.checkedDirectories, self.checkedStats,
-                       self.checkedPlotType, self.checkedErrorBar)
+        self.drawPlots()
 
     """Emulates all directories being selected causing all the data to be
     read at once.
