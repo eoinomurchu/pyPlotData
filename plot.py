@@ -5,6 +5,7 @@ import difflib
 import glob
 import itertools
 import traceback
+import re
 import wx
 import wxmpl
 
@@ -303,53 +304,27 @@ class MainFrame(wx.Frame):
         exit(0)
 
 """Returns a dictionary of shortnames to directories.
-Takes all combinations of pairs of directories and extracts non-matching
-sub strings. The longest non matching set of sub strings for a particular
-directory is used as that directory's short name/key in the directories dict.
 
-TODO Rather, I should split by '_' as ExperimentManager script uses that as
-delimiter. For each directory pairing, split them, remove common strings,
-and then concatenate with what has been found so far by previous pairings.
+Splits each file name by '_' and generates a frequency table of
+words. If a word occurs more often than len(directories) they
+are not included in the final shortname.
 """
 def findShortNames(directories):
-    dirKeys = {}
-    dirPairs = list(itertools.combinations(directories, 2))
+    dirs = OrderedDict()
+    phenoms = defaultdict(int)
 
-    for pair in dirPairs:
-        key1, key2 = s1, s2  = pair
-        s = difflib.SequenceMatcher(a=s1, b=s2)
-        fullIndices = []
-        for block in s.get_matching_blocks():
-            fullIndices.append(block[0:3])
+    for dir in directories:
+        for phenom in re.split("W+|_", dir.split("/")[-2]):
+            phenoms[phenom] = phenoms[phenom]+1
 
-        while(fullIndices):
-            block = fullIndices[-1]
-            s1 = removeSubString(s1, block[0], block[2])
-            s2 = removeSubString(s2, block[1], block[2])
-            fullIndices = fullIndices[:-1]
+    for dir in directories:
+        key = []
+        for phenom in re.split("W+|_", dir.split("/")[-2]):
+            if phenoms[phenom] < len(directories):
+                key.append(phenom)
+        dirs['_'.join(key)] =  dir
 
-        if key1 in dirKeys:
-            if len(dirKeys[key1]) < len(s1):
-                dirKeys[key1] = s1
-        else:
-            dirKeys[key1] = s1
-
-        if key2 in dirKeys:
-            if len(dirKeys[key2]) < len(s2):
-                dirKeys[key2] = s2
-        else:
-            dirKeys[key2] = s2
-
-    return {v:k for k, v in dirKeys.items()}
-
-"""Returns the given string with a sub string removed.
-Given a string and a start index and length of a sub string, this
-removes the sub string and returns the string. If the sub string is
-internal (not at beginning or end) a space is inserted where the sub
-string once was.
-"""
-def removeSubString(s, start, length):
-    return s[:start]+("" if length==0 or start==0 else " ")+s[start+length:]
+    return dirs
 
 """Sort out the command line options.
 """
