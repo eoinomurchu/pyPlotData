@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python2.7
 
 import csv
 import difflib
@@ -8,6 +8,7 @@ import traceback
 import re
 import wx
 import wxmpl
+import scipy.stats
 
 from collections import defaultdict, OrderedDict
 from matplotlib import cm
@@ -27,7 +28,7 @@ ERRORBAR_TYPES = OrderedDict([("None",  None),
 
 DATA = {"mean" : defaultdict(dict), "median" : defaultdict(dict),
         "std" : defaultdict(dict), "ste": defaultdict(dict),
-        "min" : defaultdict(dict), "max" : defaultdict(dict)}
+        "min" : defaultdict(dict), "max" : defaultdict(dict), "actual" : defaultdict(dict) }
 
 """ return the union of two lists """
 def union(a, b):
@@ -102,6 +103,7 @@ def readDatDirectory(key, directory):
                 DATA["ste"][key][aKey] = std(data[aKey], axis=0)/ sqrt(len(data[aKey]))
                 DATA["min"][key][aKey] = mean(data[aKey], axis=0)-amin(data[aKey], axis=0)
                 DATA["max"][key][aKey] = amax(data[aKey], axis=0)-mean(data[aKey], axis=0)
+                DATA["actual"][key][aKey] = data[aKey]
 
 """The plot panel.
 """
@@ -117,7 +119,7 @@ class Plot(wxmpl.PlotPanel):
         self.axes = self.fig.gca()
 
     def setUpColourCycle(self, nColours):
-        cmap = cm.get_cmap(name='Set3')
+        cmap = cm.get_cmap(name='Set1')
         return [cmap(i) for i in linspace(0.0, 1.0, nColours)]
 
     """Plots checked data and stats
@@ -240,6 +242,8 @@ class MainFrame(wx.Frame):
                 self.plots[stat].plot(self.checkedDirectories, [stat],
                                       self.checkedPlotType, self.checkedErrorBar)
             else:
+                if self.plots[stat].IsShown():
+                    update = True
                 self.plots[stat].Hide()
         if update:
             self.Fit()
@@ -303,6 +307,22 @@ class MainFrame(wx.Frame):
         self.plot.plot(self.checkedDirectories, self.checkedStats)
         exit(0)
 
+"""Loads the data from all directories into memory
+"""
+def readAllDirs(directories):
+    for shortName, directory in directories.iteritems():
+        print "Reading " + shortName + " . . . ",
+        readDatDirectory(shortName, directory)
+        print "Done"
+
+"""Performs the ranksums test on all directory pairs. 
+The test is performed on the best fitness data at the end of the runs.
+"""
+def printStatsOnAllDirPair(keys, generations):
+    pairs = list(itertools.product(keys, repeat=2))
+    for aPair in pairs:
+        print aPair + scipy.stats.ranksums(DATA["actual"][aPair[0]]["#bestFitness"][:,generations],DATA["actual"][aPair[1]]["#bestFitness"][:,generations])
+
 """Returns a dictionary of shortnames to directories.
 
 Splits each file name by '_' and generates a frequency table of
@@ -310,21 +330,21 @@ words. If a word occurs more often than len(directories) they
 are not included in the final shortname.
 """
 def findShortNames(directories):
-    dirs = OrderedDict()
+    shortnameMap = OrderedDict()
     phenoms = defaultdict(int)
 
     for dir in directories:
-        for phenom in re.split("W+|_", dir.split("/")[-2]):
+        for phenom in re.split("W+|_", dir.split("/")[-1]):
             phenoms[phenom] = phenoms[phenom]+1
 
     for dir in directories:
         key = []
-        for phenom in re.split("W+|_", dir.split("/")[-2]):
+        for phenom in re.split("W+|_", dir.split("/")[-1]):
             if phenoms[phenom] < len(directories):
                 key.append(phenom)
-        dirs['_'.join(key)] =  dir
+        shortnameMap['_'.join(key)] =  dir
 
-    return dirs
+    return shortnameMap
 
 """Sort out the command line options.
 """
@@ -332,20 +352,27 @@ def parseCommandLineOptions(argv):
     plotTitle = argv[1]
     try:
         generations = int(argv[2])
+        dirs = argv[3:]
     except ValueError:
         generations = 100
+        dirs = argv[2:]
 
-    return plotTitle, generations, argv[3:]
+    return plotTitle, generations, dirs
 
 """Main.
 """
 def main():
     plotTitle, generations, directories = parseCommandLineOptions(argv)
     directories = findShortNames(directories)
-    app = wx.PySimpleApp()
-    frame = MainFrame(None, -1, "pyplot", plotTitle, generations, directories)
-    frame.Show(True)
-    app.MainLoop()
+
+    if plotTitle == "-s":
+        readAllDirs(directories)
+        printStatsOnAllDirPair(directories.keys(), generations)
+    else:
+        app = wx.PySimpleApp()
+        frame = MainFrame(None, -1, "pyplot", plotTitle, generations, directories)
+        frame.Show(True)
+        app.MainLoop()
 
 if __name__ == '__main__':
     main()
